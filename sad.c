@@ -793,6 +793,7 @@ static int sad_msg_cb(const struct nlmsghdr *const nlh, void *const data)
 
 	if (route->src_ifindex == 0) {
 		SAD_WARNING("Route has no output interface");
+		free(route);
 		return MNL_CB_OK;
 	}
 
