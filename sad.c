@@ -986,7 +986,7 @@ static int sad_poll(struct pollfd *const pfd, struct timespec *const timeout,
 
 	sad_tsdiff(&elapsed, &after, &before);  /* initializes elapsed */
 	sad_tsdiff(&new_timeout, timeout, &elapsed);
-	memcpy(timeout, &new_timeout, sizeof timeout);
+	*timeout = new_timeout;
 
 	return 1;
 }
