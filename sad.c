@@ -684,7 +684,7 @@ static int sad_udp_socket(void)
 
 	sin.sin_family = AF_INET;
 	sin.sin_port = sad_mcast_sport;
-	sin.sin_addr.s_addr = htonl(INADDR_ANY);
+	sin.sin_addr.s_addr = INADDR_ANY;
 
 	if (bind(sockfd, (struct sockaddr *)&sin, sizeof sin) < 0)
 		SAD_PFATAL("Failed to find UDP socket");
