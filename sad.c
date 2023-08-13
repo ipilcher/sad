@@ -933,34 +933,26 @@ static void sad_tsdiff(struct timespec *const difference,
 		       const struct timespec *const end,
 		       const struct timespec *const restrict start)
 {
-	long diff;
-
 	/*
-	 * Calculate difference with millisecond resolution to keep the
-	 * numbers reasonable.
+	 * We're using CLOCK_BOOTTIME, so the tv_sec values should always be
+	 * reasonable, and their difference should never be greater than
+	 * SAD_MAX_INTERVAL (3600).
+	 *
+	 * clock_gettime() should never return a tv_nsec value greater than
+	 * 999,999,999.
 	 */
 
-	/* Max value of tv_nsec is 999,999,9999, so this can't overflow */
-	diff = end->tv_nsec - start->tv_nsec;
+	difference->tv_sec = end->tv_sec - start->tv_sec;
+	difference->tv_nsec = end->tv_nsec - start->tv_nsec;
 
-	/* Round -1/2 away from zero */
-	diff += (diff >= 0) ? 500000 : -500000;
-
-	/* Convert from nanoseconds to milliseconds */
-	diff /= 1000000;
-
-	/*
-	 * We're using CLOCK_BOOTTIME, so the tv_sec values should never be
-	 * too large.  Additionally, the difference between the two tv_sec
-	 * values should never be larger than SAD_MAX_INTERVAL (3600 seconds).
-	 */
-	diff += (end->tv_sec - start->tv_sec) * 1000;
-
-	/* CLOCK_BOOTTIME should never move backwards */
-	SAD_ASSERT(diff >= 0);
-
-	difference->tv_sec = diff / 1000;
-	difference->tv_nsec = (diff % 1000) * 1000000;
+	if (difference->tv_nsec < 0) {
+		--(difference->tv_sec);
+		difference->tv_nsec += 1000000000;
+	}
+	else if (difference->tv_nsec >= 1000000000) {
+		++(difference->tv_sec);
+		difference->tv_nsec -= 1000000000;
+	}
 }
 
 static int sad_poll(struct pollfd *const pfd, struct timespec *const timeout,
