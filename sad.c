@@ -115,6 +115,7 @@ static uint16_t sad_mcast_sport = SAD_HTONS(SAD_MCAST_SPORT);
 static _Bool sad_debug;
 static _Bool sad_syslog;
 static _Bool sad_stderr;
+static _Bool sad_mcast_loopback;
 
 /* Set in sad_parse_opts(), based on environment and command line options */
 static _Bool sad_use_syslog;
@@ -464,6 +465,13 @@ static const struct sad_opt sad_opts[] = {
 		.help		= "log to terminal (conflicts with -l)"
 	},
 	{
+		.sname		= 'L',
+		.lname		= "loopback",
+		.parse_fn	= sad_parse_flag,
+		.out		= &sad_mcast_loopback,
+		.help		= "enable multicast loopback (for testing)"
+	},
+	{
 		.sname		= 'h',
 		.lname		= "help",
 		.parse_fn	= sad_help,
@@ -689,12 +697,14 @@ static int sad_udp_socket(void)
 	if (bind(sockfd, (struct sockaddr *)&sin, sizeof sin) < 0)
 		SAD_PFATAL("Failed to bind UDP socket");
 
-	optval = 0;
+	optval = sad_mcast_loopback;
 
 	result = setsockopt(sockfd, IPPROTO_IP, IP_MULTICAST_LOOP,
 			    &optval, sizeof optval);
-	if (result < 0)
-		SAD_PFATAL("Failed to disable multicast loopback");
+	if (result < 0) {
+		SAD_PFATAL("Failed to %s multicast loopback",
+			   sad_mcast_loopback ? "enable" : "disable");
+	}
 
 	return sockfd;
 }
