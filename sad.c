@@ -797,14 +797,19 @@ static int sad_msg_cb(const struct nlmsghdr *const nlh, void *const data)
 		return MNL_CB_OK;
 	}
 
-	if (sad_is_default(route) || sad_is_local(route)) {
-		rtstr = NULL;  /* SAD_DEBUG() may not initialize rtstr */
-		SAD_DEBUG("Got route: %s", rtstr = sad_fmt_route(route));
-		free(rtstr);
-		routes = data;
-		route->next = *routes;
-		*routes = route;
+	if (!sad_is_default(route) && !sad_is_local(route)) {
+		SAD_DEBUG("Ignoring non-local, non-default route");
+		free(route);
+		return MNL_CB_OK;
 	}
+
+	rtstr = NULL;  /* SAD_DEBUG() may not initialize rtstr */
+	SAD_DEBUG("Got route: %s", rtstr = sad_fmt_route(route));
+	free(rtstr);
+
+	routes = data;
+	route->next = *routes;
+	*routes = route;
 
 	return MNL_CB_OK;
 }
@@ -867,6 +872,7 @@ static struct in_addr sad_def_saddr(struct mnl_socket *const mnlsock,
 	struct sad_route *routes;
 	const struct sad_route *route, *defrt, *localrt;
 	char *rtstr;
+	struct in_addr defsrc;
 
 	routes = sad_get_routes(mnlsock, sequence, buf);
 
@@ -920,9 +926,10 @@ static struct in_addr sad_def_saddr(struct mnl_socket *const mnlsock,
 	rtstr = NULL;  /* SAD_DEBUG() may not re-initialize rtsrt */
 	SAD_DEBUG("Using local route: %s", rtstr = sad_fmt_route(localrt));
 	free(rtstr);
-	SAD_FREE_LIST(routes);
 
-	return localrt->src_addr;
+	defsrc = localrt->src_addr;
+	SAD_FREE_LIST(routes);
+	return defsrc;
 }
 
 /*
