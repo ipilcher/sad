@@ -1,0 +1,42 @@
+policy_module(sad, 0)
+
+require {
+	type kernel_t;
+	type devlog_t;
+	type syslogd_var_run_t;
+	type user_devpts_t;
+	type node_t;
+};
+
+type sad_t;
+type sad_exec_t;
+type sad_port_t;
+
+init_daemon_domain(sad_t, sad_exec_t)
+files_type(sad_exec_t)
+corenet_port(sad_port_t)
+
+allow init_t sad_t:process2 { nnp_transition };
+
+# syslog
+allow sad_t self:unix_dgram_socket { create connect write };
+allow sad_t kernel_t:unix_dgram_socket { sendto };
+allow sad_t devlog_t:lnk_file { read };
+allow sad_t devlog_t:sock_file { write };
+allow sad_t syslogd_var_run_t:dir { search };
+
+# log to stderr (with runcon)
+allow sad_t user_devpts_t:chr_file { read write append ioctl getattr };
+
+# netlink sockets
+allow sad_t self:netlink_route_socket {
+	create bind getattr setopt read write nlmsg_read };
+
+# UDP socket
+allow sad_t self:udp_socket { create bind setopt ioctl write };
+allow sad_t sad_port_t:udp_socket { name_bind };
+allow sad_t node_t:udp_socket { node_bind };
+allow sad_t self:capability { net_bind_service };
+
+# UNIX socket (used by if_indextoname())
+allow sad_t self:unix_dgram_socket { ioctl };
