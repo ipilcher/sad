@@ -687,7 +687,7 @@ static int sad_udp_socket(void)
 	sin.sin_addr.s_addr = INADDR_ANY;
 
 	if (bind(sockfd, (struct sockaddr *)&sin, sizeof sin) < 0)
-		SAD_PFATAL("Failed to find UDP socket");
+		SAD_PFATAL("Failed to bind UDP socket");
 
 	optval = 0;
 
