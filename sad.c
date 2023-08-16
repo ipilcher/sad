@@ -29,10 +29,6 @@
 #include <libmnl/libmnl.h>
 #include <linux/rtnetlink.h>
 
-#define SAD_DEF_BUF_SIZE	8192
-#define SAD_MIN_BUF_SIZE	SAD_DEF_BUF_SIZE
-#define SAD_MAX_BUF_SIZE	(1024 * 1024)  /* 1 MiB */
-
 #define SAD_DEF_INTERVAL	30
 #define SAD_MIN_INTERVAL	5
 #define SAD_MAX_INTERVAL	3600  /* 1 hour */
@@ -41,21 +37,11 @@
 #define SAD_MCAST_DADDR		0xefff2a2a  /* 239.255.42.42 */
 #define SAD_MCAST_DPORT		4242
 
+#define SAD_ROUTE_DADDR		0x08080808  /* 8.8.8.8 */
+#define SAD_BUF_SIZE		MNL_SOCKET_BUFFER_SIZE
+
 /* Avoid awkward line breaks in function declarations with unused arguments */
 #define SAD_UNUSED(decl)	decl __attribute__((unused))
-
-/* Free a simple linked list (pointer to next node must be named 'next') */
-#define SAD_FREE_LIST(list)						\
-		do {							\
-			typeof (list) next;				\
-									\
-			while (list != NULL) {				\
-				next = list->next;			\
-				free(list);				\
-				list = next;				\
-			}						\
-		}							\
-		while (0)
 
 /* Macro versions of byte swapping functions for static initializers */
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
@@ -94,24 +80,21 @@ struct sad_netif {
 	struct ifreq		ifr;
 };
 
-/* Used for a list of default and local routes */
+/* Information about a route */
 struct sad_route {
-	struct sad_route	*next;
-	uint32_t		priority;
 	struct in_addr		src_addr;
 	uint32_t		src_ifindex;
 	struct in_addr		dst_addr;
 	struct in_addr		gateway;
 	uint8_t			dst_len;
-	uint8_t			scope;
 };
 
 /* Command line options */
-static size_t sad_buf_size = SAD_DEF_BUF_SIZE;
 static unsigned int sad_interval = SAD_DEF_INTERVAL;
 static struct in_addr sad_mcast_daddr = { SAD_HTONL(SAD_MCAST_DADDR) };
 static uint16_t sad_mcast_dport = SAD_HTONS(SAD_MCAST_DPORT);
 static uint16_t sad_mcast_sport = SAD_HTONS(SAD_MCAST_SPORT);
+static struct in_addr sad_route_daddr = { SAD_HTONL(SAD_ROUTE_DADDR) };
 static _Bool sad_debug;
 static _Bool sad_syslog;
 static _Bool sad_stderr;
@@ -228,53 +211,6 @@ static const char *sad_indextoname(const unsigned int index,
 	return dst;
 }
 
-static _Bool sad_is_default(const struct sad_route *const route)
-{
-	return route->scope == RT_SCOPE_UNIVERSE
-		&& route->dst_addr.s_addr == INADDR_ANY
-		&& route->dst_len == 0
-		&& route->gateway.s_addr != INADDR_ANY;
-}
-
-static _Bool sad_is_local(const struct sad_route *const route)
-{
-	return route->scope == RT_SCOPE_LINK
-		&& route->dst_addr.s_addr != INADDR_ANY
-		&& route->dst_len > 0
-		&& route->dst_len < 32
-		&& route->src_addr.s_addr != INADDR_ANY;
-}
-
-static char *sad_fmt_route(const struct sad_route *const route)
-{
-	char addr1[INET_ADDRSTRLEN];
-	char addr2[INET_ADDRSTRLEN];
-	char ifname[IF_NAMESIZE];
-	char *output;
-	int result;
-
-	if (sad_is_default(route)) {
-		sad_ntop(&route->gateway, addr1);
-		sad_indextoname(route->src_ifindex, ifname);
-		result = asprintf(&output, "default via %s on %s metric %u",
-				  addr1, ifname, route->priority);
-	}
-	else {
-		SAD_ASSERT(sad_is_local(route));
-		sad_ntop(&route->dst_addr, addr1);
-		sad_ntop(&route->src_addr, addr2);
-		sad_indextoname(route->src_ifindex, ifname);
-		result = asprintf(&output, "%s/%hhu from %s on %s metric %u",
-				  addr1, route->dst_len, addr2, ifname,
-				  route->priority);
-	}
-
-	if (result < 0)
-		SAD_FATAL("Memory allocation failure");
-
-	return output;
-}
-
 /*
  *	Memory allocation
  */
@@ -294,6 +230,19 @@ static void *sad_zalloc(const size_t size, const char *const file,
 }
 
 #define SAD_ZALLOC(size)	sad_zalloc(size, __FILE__, __LINE__)
+
+static void sad_free_netifs(struct sad_netif *const netifs)
+{
+	struct sad_netif *netif, *next;
+
+	netif = netifs;
+
+	while (netif != NULL) {
+		next = netif->next;
+		free(netif);
+		netif = next;
+	}
+}
 
 /*
  *	Command line parsing
@@ -336,37 +285,16 @@ static void sad_set_uint(const unsigned long value,
 	*(unsigned int *)(opt->out) = value;
 }
 
-static void sad_set_sizet(const unsigned long value,
-			  const struct sad_opt *const opt)
+static void sad_parse_addr(const struct sad_opt *const opt,
+			   const char *const arg)
 {
-	*(size_t *)(opt->out) = value;
-}
-
-static void sad_parse_daddr(SAD_UNUSED(const struct sad_opt *const opt),
-			    const char *const arg)
-{
-	/* IPv4 multicast local scope address & mask - 239.255.0.0/16 */
-	static const uint32_t local_scope_addr = SAD_HTONL(0xefff0000);
-	static const uint32_t local_scope_mask = SAD_HTONL(0xffff0000);
-
-	if (inet_aton(arg, &sad_mcast_daddr) != 1)
-		SAD_FATAL("Invalid destination address: %s", arg);
-
-	if ((sad_mcast_daddr.s_addr & local_scope_mask) != local_scope_addr) {
-		SAD_FATAL("Invalid destination address: %s "
-				"(not in 239.255.0.0/16)",
-			  arg);
+	if (inet_aton(arg, opt->out) != 1) {
+		SAD_FATAL("Invalid %s address: %s",
+			  (const char *)opt->data, arg);
 	}
 }
 
 static void sad_help(const struct sad_opt *, const char *);
-
-static const struct sad_uint_opt sad_bufsz_uopt = {
-	.name		= "buffer size",
-	.set_fn		= sad_set_sizet,
-	.min		= SAD_MIN_BUF_SIZE,
-	.max		= SAD_MAX_BUF_SIZE
-};
 
 static const struct sad_uint_opt sad_interval_uopt = {
 	.name		= "announcement interval",
@@ -391,24 +319,26 @@ static const struct sad_uint_opt sad_sport_uopt = {
 
 static const struct sad_opt sad_opts[] = {
 	{
+		.sname		= 'r',
+		.lname		= "route-dest",
+		.parse_fn	= sad_parse_addr,
+		.data		= "route destination",
+		.out		= &sad_route_daddr,
+		.arg		= 1,
+		.argname	= "ADDRESS",
+		.help		= "destination used to check default route "
+					"(default 8.8.8.8)"
+	},
+	{
 		.sname		= 'a',
 		.lname		= "dest-address",
-		.parse_fn	= sad_parse_daddr,
+		.parse_fn	= sad_parse_addr,
+		.data		= "announcement multicast",
+		.out		= &sad_mcast_daddr,
 		.arg		= 1,
 		.argname	= "ADDRESS",
 		.help		= "announcement destination address "
 					"(default 239.255.42.42)"
-	},
-	{
-		.sname		= 'b',
-		.lname		= "buffer-size",
-		.parse_fn	= sad_parse_uint,
-		.data		= &sad_bufsz_uopt,
-		.out		= &sad_buf_size,
-		.arg		= 1,
-		.argname	= "BYTES",
-		.help		= "netlink buffer size (default "
-					SAD_STR(SAD_DEF_BUF_SIZE) ")"
 	},
 	{
 		.sname		= 'i',
@@ -727,7 +657,6 @@ static int sad_attr_cb(const struct nlattr *const attr, void *const data)
 		case RTA_PREFSRC:
 		case RTA_OIF:
 		case RTA_DST:
-		case RTA_PRIORITY:
 			break;
 
 		default:
@@ -754,10 +683,6 @@ static int sad_attr_cb(const struct nlattr *const attr, void *const data)
 		case RTA_DST:
 			route->dst_addr.s_addr = mnl_attr_get_u32(attr);
 			break;
-
-		case RTA_PRIORITY:
-			route->priority = mnl_attr_get_u32(attr);
-			break;
 	}
 
 	return MNL_CB_OK;
@@ -766,8 +691,11 @@ static int sad_attr_cb(const struct nlattr *const attr, void *const data)
 static int sad_msg_cb(const struct nlmsghdr *const nlh, void *const data)
 {
 	struct rtmsg *rtm;
-	struct sad_route *route, **routes;
-	char *rtstr;
+	struct sad_route route;
+	char addr1[INET_ADDRSTRLEN];
+	char addr2[INET_ADDRSTRLEN];
+	char addr3[INET_ADDRSTRLEN];
+	char ifname[IF_NAMESIZE];
 
 	if (nlh->nlmsg_type != RTM_NEWROUTE) {
 		SAD_WARNING("Unexpected netlink message type (%hu)",
@@ -778,169 +706,104 @@ static int sad_msg_cb(const struct nlmsghdr *const nlh, void *const data)
 	rtm = mnl_nlmsg_get_payload(nlh);
 
 	if (rtm->rtm_family != AF_INET) {
-		SAD_WARNING("Unexpected route address family (%hhu)",
+		SAD_WARNING("Route address family not IPv4: %hhu",
 			    rtm->rtm_family);
 		return MNL_CB_OK;
 	}
 
-	if (rtm->rtm_table != RT_TABLE_MAIN) {
-		SAD_WARNING("Unexpected route table (%hhu)", rtm->rtm_table);
-		return MNL_CB_OK;
-	}
-
 	if (rtm->rtm_type != RTN_UNICAST) {
-		SAD_DEBUG("Ignoring non-unicast route (type %hhu)",
+		SAD_WARNING("Route type not unicast: %hhu",
 			  rtm->rtm_type);
 		return MNL_CB_OK;
 	}
 
-	route = SAD_ZALLOC(sizeof *route);
-
-	route->dst_len = rtm->rtm_dst_len;
-	route->scope = rtm->rtm_scope;
-
-	mnl_attr_parse(nlh, sizeof *rtm, sad_attr_cb, route);
-
-	if (route->src_ifindex == 0) {
-		SAD_WARNING("Route has no output interface");
-		free(route);
+	if (rtm->rtm_dst_len != 32) {
+		SAD_WARNING("Route destination length not 32: %hhu",
+			    rtm->rtm_dst_len);
 		return MNL_CB_OK;
 	}
 
-	if (!sad_is_default(route) && !sad_is_local(route)) {
-		SAD_DEBUG("Ignoring non-local, non-default route");
-		free(route);
+	bzero(&route, sizeof route);
+	route.dst_len = rtm->rtm_dst_len;
+
+	mnl_attr_parse(nlh, sizeof *rtm, sad_attr_cb, &route);
+
+	if (route.dst_addr.s_addr != sad_route_daddr.s_addr) {
+		SAD_WARNING("Route destination incorrect: %s",
+			    sad_ntop(&route.dst_addr, addr1));
+		return MNL_CB_OK;
+
+	}
+
+	if (route.src_addr.s_addr == INADDR_ANY) {
+		SAD_WARNING("Route missing source address");
 		return MNL_CB_OK;
 	}
 
-	rtstr = NULL;  /* SAD_DEBUG() may not initialize rtstr */
-	SAD_DEBUG("Got route: %s", rtstr = sad_fmt_route(route));
-	free(rtstr);
+	SAD_INFO("Found route to %s via %s from %s on %s",
+		 sad_ntop(&route.dst_addr, addr1),
+		 sad_ntop(&route.gateway, addr2),
+		 sad_ntop(&route.src_addr, addr3),
+		 sad_indextoname(route.src_ifindex, ifname));
 
-	routes = data;
-	route->next = *routes;
-	*routes = route;
-
+	*(struct in_addr *)data = route.src_addr;
 	return MNL_CB_OK;
-}
-
-static _Bool sad_addr_in_subnet(const struct in_addr addr,
-				const struct in_addr net_addr,
-				const uint8_t prefix_len)
-{
-	uint32_t netmask;
-
-	/* This only works for prefix lengths between 1 and 32 */
-	netmask = htonl(~(uint32_t)0 << (32 - prefix_len));
-
-	return (addr.s_addr & netmask) == (net_addr.s_addr & netmask);
-}
-
-static struct sad_route *sad_get_routes(struct mnl_socket *const mnlsock,
-					unsigned int *const sequence,
-					uint8_t *const buf)
-{
-	struct nlmsghdr *nlh;
-	struct rtmsg *rtm;
-	struct sad_route *routes;
-	ssize_t got;
-	int result;
-
-	nlh = mnl_nlmsg_put_header(buf);
-	nlh->nlmsg_type = RTM_GETROUTE;
-	nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
-	nlh->nlmsg_seq = (*sequence)++;
-
-	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof *rtm);
-	rtm->rtm_family = AF_INET;
-
-	mnl_attr_put_u32(nlh, RTA_TABLE, RT_TABLE_MAIN);
-
-	if (mnl_socket_sendto(mnlsock, nlh, nlh->nlmsg_len) < 0)
-		SAD_PFATAL("Failed to send netlink message");
-
-	routes = NULL;
-
-	do {
-		if ((got = mnl_socket_recvfrom(mnlsock, buf, sad_buf_size)) < 0)
-			SAD_PFATAL("Failed to receive netlink message");
-
-		result = mnl_cb_run(buf, got, 0, mnl_socket_get_portid(mnlsock),
-				    sad_msg_cb, &routes);
-		if (result < 0)
-			SAD_PFATAL("Netlink request failed");
-	}
-	while (result > 0);
-
-	return routes;
 }
 
 static struct in_addr sad_def_saddr(struct mnl_socket *const mnlsock,
 				    unsigned int *const sequence,
-				    uint8_t *const buf)
+				    uint8_t buf[const static SAD_BUF_SIZE])
 {
-	struct sad_route *routes;
-	const struct sad_route *route, *defrt, *localrt;
-	char *rtstr;
+	static _Bool already_warned;
+
+	struct nlmsghdr *nlh;
+	struct rtmsg *rtm;
+	uint32_t seq;
+	ssize_t got;
+	int result;
 	struct in_addr defsrc;
+	char addrstr[INET_ADDRSTRLEN];
 
-	routes = sad_get_routes(mnlsock, sequence, buf);
+	nlh = mnl_nlmsg_put_header(buf);
+	nlh->nlmsg_type = RTM_GETROUTE;
+	nlh->nlmsg_flags = NLM_F_REQUEST;
+	nlh->nlmsg_seq = seq = (*sequence)++;
 
-	defrt = NULL;
-	for (route = routes; route != NULL; route = route->next) {
+	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof *rtm);
+	rtm->rtm_family = AF_INET;
+	rtm->rtm_dst_len = 32;
+	rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+	rtm->rtm_flags = RTM_F_LOOKUP_TABLE;
 
-		if (!sad_is_default(route))
-			continue;
+	mnl_attr_put_u32(nlh, RTA_DST, sad_route_daddr.s_addr);
 
-		if (defrt == NULL || route->priority < defrt->priority)
-			defrt = route;
+	if (mnl_socket_sendto(mnlsock, nlh, nlh->nlmsg_len) < 0)
+		SAD_PFATAL("Failed to send netlink message");
+
+	if ((got = mnl_socket_recvfrom(mnlsock, buf, SAD_BUF_SIZE)) < 0)
+		SAD_PFATAL("Failed to receive netlink message");
+
+	defsrc.s_addr = INADDR_ANY;  /* Not INADDR_NONE!  (See main().) */
+
+	result = mnl_cb_run(buf, got, seq, mnl_socket_get_portid(mnlsock),
+			    sad_msg_cb, &defsrc);
+	if (result < 0 && errno != ENETUNREACH)
+		SAD_PFATAL("Netlink request failed");
+
+	if (defsrc.s_addr == INADDR_ANY) {
+		if (!already_warned) {
+			SAD_WARNING("No route to destination: %s",
+				    sad_ntop(&sad_route_daddr, addrstr));
+			already_warned = 1;
+		}
+	}
+	else {
+		already_warned = 0;
 	}
 
-	if (defrt == NULL) {
-		SAD_WARNING("No default route found");
-		SAD_FREE_LIST(routes);
-		return (struct in_addr){ .s_addr = INADDR_ANY };
-	}
-
-	rtstr = NULL;  /* SAD_DEBUG() may not initialize rtstr */
-	SAD_DEBUG("Using default route: %s", rtstr = sad_fmt_route(defrt));
-	free(rtstr);
-
-	localrt = NULL;
-	for (route = routes; route != NULL; route = route->next) {
-
-		if (!sad_is_local(route))
-			continue;
-
-		if (route->src_ifindex != defrt->src_ifindex)
-			continue;
-
-		if (!sad_addr_in_subnet(defrt->gateway,
-					 route->dst_addr, route->dst_len))
-			continue;
-
-		/*
-		 * If 2 routes are equally specific, use the one that was first
-		 * in the kernel list (which will be later in the linked list).
-		 */
-		if (localrt == NULL || route->dst_len >= localrt->dst_len)
-			localrt = route;
-	}
-
-	if (localrt == NULL) {
-		SAD_WARNING("No local route to default gateway");
-		SAD_FREE_LIST(routes);
-		return (struct in_addr){ .s_addr = INADDR_ANY };
-	}
-
-	rtstr = NULL;  /* SAD_DEBUG() may not re-initialize rtsrt */
-	SAD_DEBUG("Using local route: %s", rtstr = sad_fmt_route(localrt));
-	free(rtstr);
-
-	defsrc = localrt->src_addr;
-	SAD_FREE_LIST(routes);
 	return defsrc;
 }
+
 
 /*
  *	Startup & main loop
@@ -1099,7 +962,7 @@ int main(SAD_UNUSED(const int argc), char **const argv)
 	pargv = sad_parse_opts(argv);
 	udpsock = sad_udp_socket();
 	netifs = sad_parse_interfaces(pargv, udpsock);
-	buf = SAD_ZALLOC(sad_buf_size);
+	buf = SAD_ZALLOC(SAD_BUF_SIZE);
 	sequence = 0;
 	mnlsock = sad_mnl_socket();
 	pfd.fd = sad_nl_socket();
@@ -1134,11 +997,17 @@ int main(SAD_UNUSED(const int argc), char **const argv)
 			announce = 1;
 		}
 
+		if (sad_exit_flag)
+			break;
+
 		/*
-		 * Routing table has changed, and sad_poll() has updated
-		 * timeout (or we caught an exit signal).  Empty the socket
-		 * buffer, so next ppoll() call doesn't return immediately.
+		 * sad_ppoll() updated timeout, so next pass will wait remainder
+		 * of interval if default route hasn't changed
 		 */
+
+		SAD_INFO("Routing table has changed");
+
+		/* Empty socket buffer, so ppoll() doesn't return immediately */
 		while (recv(pfd.fd, buf, sizeof buf, 0) >= 0);
 		if (errno != EAGAIN)
 			SAD_PFATAL("Failed to receive netlink message");
@@ -1152,7 +1021,7 @@ int main(SAD_UNUSED(const int argc), char **const argv)
 	if (close(udpsock) < 0)
 		SAD_PFATAL("Failed to close UDP socket");
 
-	SAD_FREE_LIST(netifs);
+	sad_free_netifs(netifs);
 	free(buf);
 
 	return EXIT_SUCCESS;
