@@ -1,3 +1,14 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+#
+#	SAD - Source Address Daemon
+#
+#	SELinux policy rules
+#
+#	Copyright 2023 Ian Pilcher <arequipeno@gmail.com>
+#
+
+
 policy_module(sad, 0)
 
 require {
