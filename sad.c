@@ -29,15 +29,20 @@
 #include <libmnl/libmnl.h>
 #include <linux/rtnetlink.h>
 
+/* Default, minimum, and maximum seconds between announcements */
 #define SAD_DEF_INTERVAL	30
 #define SAD_MIN_INTERVAL	5
 #define SAD_MAX_INTERVAL	3600  /* 1 hour */
 
+/* Default source port, multicast destination address, and destination port */
 #define SAD_MCAST_SPORT		42
 #define SAD_MCAST_DADDR		0xefff2a2a  /* 239.255.42.42 */
 #define SAD_MCAST_DPORT		4242
 
+/* Default address used to query kernel for default route */
 #define SAD_ROUTE_DADDR		0x08080808  /* 8.8.8.8 */
+
+/* Netlink message buffer size */
 #define SAD_BUF_SIZE		MNL_SOCKET_BUFFER_SIZE
 
 /* Avoid awkward line breaks in function declarations with unused arguments */
@@ -100,7 +105,7 @@ static _Bool sad_syslog;
 static _Bool sad_stderr;
 static _Bool sad_mcast_loopback;
 
-/* Set in sad_parse_opts(), based on environment and command line options */
+/* Values that depend on multiple command line options */
 static _Bool sad_use_syslog;
 static struct sockaddr_in sad_mcast_sockaddr;
 
@@ -133,7 +138,7 @@ static void sad_log(const int level, const char *const format, ...)
 }
 
 /* Preprocessor dance to "stringify" an expanded macro value (e.g. __LINE__) */
-#define SAD_STR_RAW(x)	#x
+#define SAD_STR_RAW(x)		#x
 #define	SAD_STR(x)		SAD_STR_RAW(x)
 
 /* Expands to a message preamble which specifies file & line */
@@ -454,7 +459,7 @@ static _Bool sad_do_opt(char **const argp, const struct sad_opt *const opt,
 	}
 
 	if (present) {
-		SAD_FATAL("Duplicate command line options: %c/%s",
+		SAD_FATAL("Duplicate command line options: -%c/--%s",
 			  opt->sname, opt->lname);
 	}
 
@@ -856,7 +861,7 @@ static int sad_poll(struct pollfd *const pfd, struct timespec *const timeout,
 	if (clock_gettime(CLOCK_BOOTTIME, &after) < 0)
 		SAD_PFATAL("Failed to get current time");
 
-	sad_tsdiff(&elapsed, &after, &before);  /* initializes elapsed */
+	sad_tsdiff(&elapsed, &after, &before);
 	sad_tsdiff(&new_timeout, timeout, &elapsed);
 	*timeout = new_timeout;
 
