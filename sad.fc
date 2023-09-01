@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+#
+#	SAD - Source Address Daemon
+#
+#	SELinux policy file contexts
+#
+#	Copyright 2023 Ian Pilcher <arequipeno@gmail.com>
+#
+
+/usr/(local/)?bin/sad	--	gen_context(system_u:object_r:sad_exec_t, s0)
