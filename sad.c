@@ -326,7 +326,7 @@ static const struct sad_opt sad_opts[] = {
 		.out		= &sad_route_daddr,
 		.arg		= 1,
 		.argname	= "ADDRESS",
-		.help		= "destination used to check default route "
+		.help		= "destination used to check the default route "
 					"(default 8.8.8.8)"
 	},
 	{
