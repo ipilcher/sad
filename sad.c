@@ -416,7 +416,7 @@ static void sad_help(SAD_UNUSED(const struct sad_opt *const opt),
 	const struct sad_opt *o;
 	int len;
 
-	puts("Usage: sad OPTION... INTERFACES...\nOptions:");
+	puts("Usage: sad OPTIONS... INTERFACES...\nOptions:");
 
 	for (o = sad_opts; o->sname != 0; ++o) {
 
