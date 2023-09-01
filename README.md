@@ -88,7 +88,7 @@ Sep 01 12:06:40 firewall.penurio.us sad[14928]: INFO: sad.c:980: Advertising sou
 ```
 
 Check that the daemon correctly detected the default source addresses and is
-announcing the it on the correct interfaces.
+announcing it on the correct interfaces.
 
 If necessary, the daemon can be run from the command line (usually with `-d` or
 `--debug`) for debugging purposes.  To run as a non-`root` user, specify a
